@@ -2033,7 +2033,7 @@ ostree_repo_write_commit_with_time (OstreeRepo      *self,
 {
   gboolean ret = FALSE;
   g_autofree char *ret_commit = NULL;
-  g_autoptr(GVariant) commit = NULL;
+  g_autoptr(GVariant) commit_variant = NULL;
   g_autoptr(GVariant) new_metadata = NULL;
   g_autofree guchar *commit_csum = NULL;
   OstreeRepoFile *repo_root = OSTREE_REPO_FILE (root);
@@ -2043,7 +2043,7 @@ ostree_repo_write_commit_with_time (OstreeRepo      *self,
                                    cancellable, error))
     goto out;
 
-  commit = g_variant_new ("(@a{sv}@ay@a(say)sst@ay@ay)",
+  commit_variant = g_variant_new ("(@a{sv}@ay@a(say)sst@ay@ay)",
                           new_metadata ? new_metadata : create_empty_gvariant_dict (),
                           parent ? ostree_checksum_to_bytes_v (parent) : ot_gvariant_new_bytearray (NULL, 0),
                           g_variant_new_array (G_VARIANT_TYPE ("(say)"), NULL, 0),
@@ -2051,9 +2051,9 @@ ostree_repo_write_commit_with_time (OstreeRepo      *self,
                           GUINT64_TO_BE (time),
                           ostree_checksum_to_bytes_v (ostree_repo_file_tree_get_contents_checksum (repo_root)),
                           ostree_checksum_to_bytes_v (ostree_repo_file_tree_get_metadata_checksum (repo_root)));
-  g_variant_ref_sink (commit);
+  g_variant_ref_sink (commit_variant);
   if (!ostree_repo_write_metadata (self, OSTREE_OBJECT_TYPE_COMMIT, NULL,
-                                   commit, &commit_csum,
+                                   commit_variant, &commit_csum,
                                    cancellable, error))
     goto out;
 

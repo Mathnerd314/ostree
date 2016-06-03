@@ -93,7 +93,7 @@ dump_indented_lines (const gchar *data)
 }
 
 static void
-dump_commit (GVariant            *variant,
+dump_commit (GVariant            *commit_variant,
              OstreeDumpFlags      flags)
 {
   const gchar *subject;
@@ -103,8 +103,7 @@ dump_commit (GVariant            *variant,
   g_autofree char *version = NULL;
   g_autoptr(GError) local_error = NULL;
 
-  /* See OSTREE_COMMIT_GVARIANT_FORMAT */
-  g_variant_get (variant, "(a{sv}aya(say)&s&stayay)", NULL, NULL, NULL,
+  g_variant_get (commit_variant, "(a{sv}aya(say)&s&stayay)", NULL, NULL, NULL,
                  &subject, &body, &timestamp, NULL, NULL);
 
   timestamp = GUINT64_FROM_BE (timestamp);
@@ -113,7 +112,7 @@ dump_commit (GVariant            *variant,
     errx (1, "Failed to read commit: %s", local_error->message);
   g_print ("Date:  %s\n", str);
 
-  if ((version = ot_admin_checksum_version (variant)))
+  if ((version = ot_admin_checksum_version (commit_variant)))
     {
       g_print ("Version: %s\n", version);
     }

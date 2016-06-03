@@ -69,6 +69,7 @@ ostree_repo_commit_traverse_iter_init_commit (OstreeRepoCommitTraverseIter   *it
   real->current_dir = NULL;
   real->idx = 0;
 
+  /* See OSTREE_COMMIT_GVARIANT_STRING */
   g_variant_get_child (commit, 6, "@ay", &content_csum_bytes);
   csum = ostree_checksum_bytes_peek_validate (content_csum_bytes, error);
   if (!csum)

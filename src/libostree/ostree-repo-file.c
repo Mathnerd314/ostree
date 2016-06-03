@@ -163,7 +163,7 @@ _ostree_repo_file_new_for_commit (OstreeRepo  *repo,
                                  commit, &commit_v, error))
     goto out;
 
-  /* PARSE OSTREE_OBJECT_TYPE_COMMIT */
+  /* PARSE OSTREE_COMMIT_GVARIANT */
   g_variant_get_child (commit_v, 6, "@ay", &tree_contents_csum_v);
   ostree_checksum_inplace_from_bytes (g_variant_get_data (tree_contents_csum_v),
                                       tree_contents_csum);
