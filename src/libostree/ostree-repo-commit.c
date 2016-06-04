@@ -1965,6 +1965,7 @@ create_empty_gvariant_dict (void)
  * @subject: (allow-none): Subject
  * @body: (allow-none): Body
  * @metadata: (allow-none): GVariant of type a{sv}, or %NULL for none
+ * @time: Unix timestamp of the commit
  * @root: The tree to point the commit to
  * @out_commit: (out): Resulting ASCII SHA256 checksum for commit
  * @cancellable: Cancellable

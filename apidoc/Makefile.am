@@ -60,33 +60,35 @@ FIXXREF_OPTIONS=
 # Used for dependencies. The docs will be rebuilt if any of these change.
 # e.g. HFILE_GLOB=$(top_srcdir)/gtk/*.h
 # e.g. CFILE_GLOB=$(top_srcdir)/gtk/*.c
-HFILE_GLOB=$(addprefix $(top_srcdir)/,$(libostree_public_headers))
+# HFILE_GLOB=$(addprefix $(top_srcdir)/,$(libostree_public_headers))
+HFILE_GLOB=$(top_srcdir)/src/libostree/*.h
 CFILE_GLOB=$(top_srcdir)/src/libostree/*.c
 
 # Header files to ignore when scanning.
 # e.g. IGNORE_HFILES=gtkdebug.h gtkintl.h
-IGNORE_HFILES= \
-	bupsplit.h \
-	ostree-bootloader.h \
-	ostree-bootloader-grub2.h \
-	ostree-bootloader-syslinux.h \
-	ostree-bootloader-uboot.h \
-	ostree-cmdprivate.h \
+ IGNORE_HFILES= \
 	ostree-core-private.h \
-	ostree-fetcher.h \
-	ostree-gpg-verifier.h \
-	ostree-gpg-verify-result-private.h \
-	ostree-kernel-args.h \
-	ostree-libarchive-input-stream.h \
-	ostree-lzma-compressor.h \
-	ostree-lzma-decompressor.h \
-	ostree-metalink.h \
-	ostree-repo-file-enumerator.h \
 	ostree-repo-private.h \
-	ostree-repo-static-delta-private.h \
-	ostree-sysroot-private.h \
-	ostree-tls-cert-interaction.h \
 	$(NULL)
+# 	bupsplit.h \
+# 	ostree-bootloader.h \
+# 	ostree-bootloader-grub2.h \
+# 	ostree-bootloader-syslinux.h \
+# 	ostree-bootloader-uboot.h \
+# 	ostree-cmdprivate.h \
+# 	ostree-fetcher.h \
+# 	ostree-gpg-verifier.h \
+# 	ostree-gpg-verify-result-private.h \
+# 	ostree-kernel-args.h \
+# 	ostree-libarchive-input-stream.h \
+# 	ostree-lzma-compressor.h \
+# 	ostree-lzma-decompressor.h \
+# 	ostree-metalink.h \
+# 	ostree-repo-file-enumerator.h \
+# 	ostree-repo-static-delta-private.h \
+# 	ostree-sysroot-private.h \
+# 	ostree-tls-cert-interaction.h \
+#
 
 # Images to copy into HTML directory.
 # e.g. HTML_IMAGES=$(top_srcdir)/gtk/stock-icons/stock_about_24.png
