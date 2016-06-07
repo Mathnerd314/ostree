@@ -107,6 +107,9 @@ struct OstreeFetcher
 
   GThread *session_thread;
   ThreadClosure *thread_closure;
+
+  SoupURI *base_uri;
+  SoupURI *fetching_sync_uri;
 };
 
 enum {
@@ -114,7 +117,7 @@ enum {
   PROP_CONFIG_FLAGS
 };
 
-G_DEFINE_TYPE (OstreeFetcher, _ostree_fetcher, G_TYPE_OBJECT)
+G_DEFINE_TYPE (OstreeFetcher, ostree_fetcher, G_TYPE_OBJECT)
 
 static ThreadClosure *
 thread_closure_ref (ThreadClosure *thread_closure)
@@ -381,7 +384,7 @@ session_thread_request_uri (ThreadClosure *thread_closure,
 
       /* The tmp directory is lazily created for each fetcher instance,
        * since it may require superuser permissions and some instances
-       * only need _ostree_fetcher_request_uri_to_membuf() which keeps
+       * only need ostree_fetcher_request_uri_to_membuf() which keeps
        * everything in memory buffers. */
       if (thread_closure->tmpdir_name == NULL)
         {
@@ -473,7 +476,7 @@ ostree_fetcher_session_thread (gpointer data)
 }
 
 static void
-_ostree_fetcher_set_property (GObject      *object,
+ostree_fetcher_set_property (GObject      *object,
                               guint         prop_id,
                               const GValue *value,
                               GParamSpec   *pspec)
@@ -492,7 +495,7 @@ _ostree_fetcher_set_property (GObject      *object,
 }
 
 static void
-_ostree_fetcher_get_property (GObject    *object,
+ostree_fetcher_get_property (GObject    *object,
                               guint       prop_id,
                               GValue     *value,
                               GParamSpec *pspec)
@@ -511,7 +514,7 @@ _ostree_fetcher_get_property (GObject    *object,
 }
 
 static void
-_ostree_fetcher_finalize (GObject *object)
+ostree_fetcher_finalize (GObject *object)
 {
   OstreeFetcher *self = OSTREE_FETCHER (object);
 
@@ -520,11 +523,11 @@ _ostree_fetcher_finalize (GObject *object)
   g_clear_pointer (&self->session_thread, g_thread_unref);
   g_clear_pointer (&self->thread_closure, thread_closure_unref);
 
-  G_OBJECT_CLASS (_ostree_fetcher_parent_class)->finalize (object);
+  G_OBJECT_CLASS (ostree_fetcher_parent_class)->finalize (object);
 }
 
 static void
-_ostree_fetcher_constructed (GObject *object)
+ostree_fetcher_constructed (GObject *object)
 {
   OstreeFetcher *self = OSTREE_FETCHER (object);
   g_autoptr(GMainContext) main_context = NULL;
@@ -563,7 +566,7 @@ _ostree_fetcher_constructed (GObject *object)
 
   http_proxy = g_getenv ("http_proxy");
   if (http_proxy != NULL)
-    _ostree_fetcher_set_proxy (self, http_proxy);
+    ostree_fetcher_set_proxy (self, http_proxy);
 
   /* FIXME Maybe implement GInitableIface and use g_thread_try_new()
    *       so we can try to handle thread creation errors gracefully? */
@@ -571,18 +574,18 @@ _ostree_fetcher_constructed (GObject *object)
                                        ostree_fetcher_session_thread,
                                        thread_closure_ref (self->thread_closure));
 
-  G_OBJECT_CLASS (_ostree_fetcher_parent_class)->constructed (object);
+  G_OBJECT_CLASS (ostree_fetcher_parent_class)->constructed (object);
 }
 
 static void
-_ostree_fetcher_class_init (OstreeFetcherClass *klass)
+ostree_fetcher_class_init (OstreeFetcherClass *klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
 
-  gobject_class->set_property = _ostree_fetcher_set_property;
-  gobject_class->get_property = _ostree_fetcher_get_property;
-  gobject_class->finalize = _ostree_fetcher_finalize;
-  gobject_class->constructed = _ostree_fetcher_constructed;
+  gobject_class->set_property = ostree_fetcher_set_property;
+  gobject_class->get_property = ostree_fetcher_get_property;
+  gobject_class->finalize = ostree_fetcher_finalize;
+  gobject_class->constructed = ostree_fetcher_constructed;
 
   g_object_class_install_property (gobject_class,
                                    PROP_CONFIG_FLAGS,
@@ -597,12 +600,12 @@ _ostree_fetcher_class_init (OstreeFetcherClass *klass)
 }
 
 static void
-_ostree_fetcher_init (OstreeFetcher *self)
+ostree_fetcher_init (OstreeFetcher *self)
 {
 }
 
 OstreeFetcher *
-_ostree_fetcher_new (int                      tmpdir_dfd,
+ostree_fetcher_new (int                      tmpdir_dfd,
                      OstreeFetcherConfigFlags flags)
 {
   OstreeFetcher *self;
@@ -615,13 +618,13 @@ _ostree_fetcher_new (int                      tmpdir_dfd,
 }
 
 int
-_ostree_fetcher_get_dfd (OstreeFetcher *fetcher)
+ostree_fetcher_get_dfd (OstreeFetcher *fetcher)
 {
   return fetcher->thread_closure->tmpdir_dfd;
 }
 
 void
-_ostree_fetcher_set_proxy (OstreeFetcher *self,
+ostree_fetcher_set_proxy (OstreeFetcher *self,
                            const char    *http_proxy)
 {
   SoupURI *proxy_uri;
@@ -645,7 +648,7 @@ _ostree_fetcher_set_proxy (OstreeFetcher *self,
 }
 
 void
-_ostree_fetcher_set_client_cert (OstreeFetcher   *self,
+ostree_fetcher_set_client_cert (OstreeFetcher   *self,
                                  GTlsCertificate *cert)
 {
   g_return_if_fail (OSTREE_IS_FETCHER (self));
@@ -662,7 +665,7 @@ _ostree_fetcher_set_client_cert (OstreeFetcher   *self,
 }
 
 void
-_ostree_fetcher_set_tls_database (OstreeFetcher *self,
+ostree_fetcher_set_tls_database (OstreeFetcher *self,
                                   GTlsDatabase  *db)
 {
   g_return_if_fail (OSTREE_IS_FETCHER (self));
@@ -998,7 +1001,7 @@ ostree_fetcher_request_uri_internal (OstreeFetcher         *self,
 }
 
 void
-_ostree_fetcher_request_uri_with_partial_async (OstreeFetcher         *self,
+ostree_fetcher_request_uri_with_partial_async (OstreeFetcher         *self,
                                                SoupURI               *uri,
                                                guint64                max_size,
                                                int                    priority,
@@ -1008,17 +1011,17 @@ _ostree_fetcher_request_uri_with_partial_async (OstreeFetcher         *self,
 {
   ostree_fetcher_request_uri_internal (self, uri, FALSE, max_size, priority, cancellable,
                                        callback, user_data,
-                                       _ostree_fetcher_request_uri_with_partial_async);
+                                       ostree_fetcher_request_uri_with_partial_async);
 }
 
 char *
-_ostree_fetcher_request_uri_with_partial_finish (OstreeFetcher         *self,
+ostree_fetcher_request_uri_with_partial_finish (OstreeFetcher         *self,
                                                 GAsyncResult          *result,
                                                 GError               **error)
 {
   g_return_val_if_fail (g_task_is_valid (result, self), NULL);
   g_return_val_if_fail (g_async_result_is_tagged (result,
-                        _ostree_fetcher_request_uri_with_partial_async), NULL);
+                        ostree_fetcher_request_uri_with_partial_async), NULL);
 
   return g_task_propagate_pointer (G_TASK (result), error);
 }
@@ -1050,7 +1053,7 @@ ostree_fetcher_stream_uri_finish (OstreeFetcher         *self,
 }
 
 guint64
-_ostree_fetcher_bytes_transferred (OstreeFetcher       *self)
+ostree_fetcher_bytes_transferred (OstreeFetcher       *self)
 {
   GHashTableIter hiter;
   gpointer key, value;
@@ -1101,16 +1104,16 @@ fetch_uri_sync_on_complete (GObject        *object,
 }
 
 gboolean
-_ostree_fetcher_request_uri_to_membuf (OstreeFetcher  *fetcher,
+ostree_fetcher_request_uri_to_membuf (OstreeFetcher  *fetcher,
                                        SoupURI        *uri,
                                        gboolean        add_nul,
                                        gboolean        allow_noent,
                                        GBytes         **out_contents,
-                                       guint64        max_size,
                                        GCancellable   *cancellable,
                                        GError         **error)
 {
   gboolean ret = FALSE;
+  fetcher->fetching_sync_uri = uri;
   const guint8 nulchar = 0;
   g_autofree char *ret_contents = NULL;
   g_autoptr(GMemoryOutputStream) buf = NULL;
@@ -1130,7 +1133,7 @@ _ostree_fetcher_request_uri_to_membuf (OstreeFetcher  *fetcher,
   data.error = error;
 
   ostree_fetcher_stream_uri_async (fetcher, uri,
-                                   max_size,
+                                   OSTREE_MAX_METADATA_SIZE,
                                    OSTREE_FETCHER_DEFAULT_PRIORITY,
                                    cancellable,
                                    fetch_uri_sync_on_complete, &data);
@@ -1172,5 +1175,125 @@ _ostree_fetcher_request_uri_to_membuf (OstreeFetcher  *fetcher,
   if (mainctx)
     g_main_context_pop_thread_default (mainctx);
   g_clear_object (&(data.result_stream));
+  fetcher->fetching_sync_uri = NULL;
+  return ret;
+}
+
+gboolean
+ostree_fetcher_request_uri_to_membuf_utf8
+                             (OstreeFetcher *fetcher,
+                              SoupURI     *uri,
+                              char       **out_contents,
+                              GCancellable  *cancellable,
+                              GError     **error)
+{
+  gboolean ret = FALSE;
+  g_autoptr(GBytes) bytes = NULL;
+  g_autofree char *ret_contents = NULL;
+  gsize len;
+
+  if (!ostree_fetcher_request_uri_to_membuf (fetcher, uri, TRUE, FALSE,
+                                              &bytes, cancellable, error))
+    goto out;
+
+  ret_contents = g_bytes_unref_to_data (bytes, &len);
+  bytes = NULL;
+
+  if (!g_utf8_validate (ret_contents, -1, NULL))
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                   "Invalid UTF-8");
+      goto out;
+    }
+
+  ret = TRUE;
+  ot_transfer_out_value (out_contents, &ret_contents);
+ out:
+  return ret;
+}
+
+
+SoupURI *
+vsuburi_new (SoupURI   *base,
+            const char *first,
+            va_list args)
+{
+  GPtrArray *arg_array;
+  const char *arg;
+  char *subpath;
+  SoupURI *ret;
+
+  arg_array = g_ptr_array_new ();
+  g_ptr_array_add (arg_array, (char*)soup_uri_get_path (base));
+  g_ptr_array_add (arg_array, (char*)first);
+
+  while ((arg = va_arg (args, const char *)) != NULL)
+    g_ptr_array_add (arg_array, (char*)arg);
+  g_ptr_array_add (arg_array, NULL);
+
+  subpath = g_build_filenamev ((char**)arg_array->pdata);
+  g_ptr_array_unref (arg_array);
+
+  ret = soup_uri_copy (base);
+  soup_uri_set_path (ret, subpath);
+  g_free (subpath);
+  return ret;
+}
+
+SoupURI *
+suburi_new (SoupURI   *base,
+            const char *first,
+            ...)
+{
+  SoupURI *ret;
+  va_list args;
+  va_start (args, first);
+  ret = vsuburi_new(base, first, args);
+  va_end (args);
+  return ret;
+}
+
+gboolean ostree_fetcher_request_suburi_to_membuf_utf8
+                             (OstreeFetcher *fetcher,
+                              char       **out_contents,
+                              GCancellable  *cancellable,
+                              GError     **error,
+                              const char *first,
+                              ...)
+{
+  SoupURI *target_uri;
+  va_list args;
+  va_start (args, first);
+  target_uri = vsuburi_new(fetcher->base_uri, first, args);
+  va_end (args);
+  return ostree_fetcher_request_uri_to_membuf_utf8 (fetcher, target_uri, ret_contents, cancellable, error)
+}
+
+gboolean
+fetch_ref_contents (OstreeFetcher *fetcher,
+                    const char    *ref,
+                    char         **out_contents,
+                    GCancellable  *cancellable,
+                    GError       **error)
+{
+  gboolean ret = FALSE;
+  g_autofree char *ret_contents = NULL;
+  SoupURI *target_uri = NULL;
+
+  target_uri = suburi_new (fetcher->base_uri, "refs", "heads", ref, NULL);
+
+  if (!ostree_fetcher_request_uri_to_membuf_utf8 (fetcher, target_uri, &ret_contents, cancellable, error))
+    goto out;
+
+  g_strchomp (ret_contents);
+
+  if (!ostree_validate_checksum_string (ret_contents, error))
+    goto out;
+
+  ret = TRUE;
+  ot_transfer_out_value (out_contents, &ret_contents);
+ out:
+  if (target_uri)
+    soup_uri_free (target_uri);
   return ret;
 }

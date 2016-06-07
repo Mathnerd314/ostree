@@ -29,7 +29,7 @@
 
 G_BEGIN_DECLS
 
-#define OSTREE_TYPE_FETCHER         (_ostree_fetcher_get_type ())
+#define OSTREE_TYPE_FETCHER         (ostree_fetcher_get_type ())
 #define OSTREE_FETCHER(o)           (G_TYPE_CHECK_INSTANCE_CAST ((o), OSTREE_TYPE_FETCHER, OstreeFetcher))
 #define OSTREE_FETCHER_CLASS(k)     (G_TYPE_CHECK_CLASS_CAST((k), OSTREE_TYPE_FETCHER, OstreeFetcherClass))
 #define OSTREE_IS_FETCHER(o)        (G_TYPE_CHECK_INSTANCE_TYPE ((o), OSTREE_TYPE_FETCHER))
@@ -52,25 +52,25 @@ typedef enum {
   OSTREE_FETCHER_FLAGS_TLS_PERMISSIVE = (1 << 0)
 } OstreeFetcherConfigFlags;
 
-GType   _ostree_fetcher_get_type (void) G_GNUC_CONST;
+GType   ostree_fetcher_get_type (void) G_GNUC_CONST;
 
-OstreeFetcher *_ostree_fetcher_new (int                      tmpdir_dfd,
+OstreeFetcher *ostree_fetcher_new (int                      tmpdir_dfd,
                                     OstreeFetcherConfigFlags flags);
 
-int  _ostree_fetcher_get_dfd (OstreeFetcher *fetcher);
+int  ostree_fetcher_get_dfd (OstreeFetcher *fetcher);
 
-void _ostree_fetcher_set_proxy (OstreeFetcher *fetcher,
+void ostree_fetcher_set_proxy (OstreeFetcher *fetcher,
                                 const char    *proxy);
 
-void _ostree_fetcher_set_client_cert (OstreeFetcher *fetcher,
+void ostree_fetcher_set_client_cert (OstreeFetcher *fetcher,
                                      GTlsCertificate *cert);
 
-void _ostree_fetcher_set_tls_database (OstreeFetcher *self,
+void ostree_fetcher_set_tls_database (OstreeFetcher *self,
                                        GTlsDatabase *db);
 
-guint64 _ostree_fetcher_bytes_transferred (OstreeFetcher       *self);
+guint64 ostree_fetcher_bytes_transferred (OstreeFetcher       *self);
 
-void _ostree_fetcher_request_uri_with_partial_async (OstreeFetcher         *self,
+void ostree_fetcher_request_uri_with_partial_async (OstreeFetcher         *self,
                                                     SoupURI               *uri,
                                                     guint64                max_size,
                                                     int                    priority,
@@ -78,18 +78,45 @@ void _ostree_fetcher_request_uri_with_partial_async (OstreeFetcher         *self
                                                     GAsyncReadyCallback    callback,
                                                     gpointer               user_data);
 
-char *_ostree_fetcher_request_uri_with_partial_finish (OstreeFetcher *self,
+char *ostree_fetcher_request_uri_with_partial_finish (OstreeFetcher *self,
                                                        GAsyncResult  *result,
                                                        GError       **error);
 
-gboolean _ostree_fetcher_request_uri_to_membuf (OstreeFetcher *fetcher,
+gboolean ostree_fetcher_request_uri_to_membuf (OstreeFetcher *fetcher,
                                                 SoupURI        *uri,
                                                 gboolean       add_nul,
                                                 gboolean       allow_noent,
                                                 GBytes         **out_contents,
-                                                guint64        max_size,
                                                 GCancellable   *cancellable,
                                                 GError         **error);
+
+gboolean ostree_fetcher_request_uri_to_membuf_utf8
+                             (OstreeFetcher *fetcher,
+                              SoupURI     *uri,
+                              char       **out_contents,
+                              GCancellable  *cancellable,
+                              GError     **error);
+
+SoupURI *
+suburi_new (SoupURI   *base,
+            const char *first,
+            ...) G_GNUC_NULL_TERMINATED;
+
+gboolean ostree_fetcher_request_suburi_to_membuf_utf8
+                             (OstreeFetcher *fetcher,
+                              char       **out_contents,
+                              GCancellable  *cancellable,
+                              GError     **error,
+                              const char *first,
+                              ...) G_GNUC_NULL_TERMINATED;
+
+gboolean
+fetch_ref_contents (OstreeFetcher *fetcher,
+                    const char    *ref,
+                    char         **out_contents,
+                    GCancellable  *cancellable,
+                    GError       **error);
+
 G_END_DECLS
 
 #endif

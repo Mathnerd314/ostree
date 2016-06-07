@@ -46,7 +46,6 @@ typedef struct {
   char         *remote_name;
   OstreeRepoMode remote_mode;
   OstreeFetcher *fetcher;
-  SoupURI      *base_uri;
   OstreeRepo   *remote_repo_local;
 
   GMainContext    *main_context;
@@ -61,8 +60,7 @@ typedef struct {
     OSTREE_PULL_PHASE_FETCHING_OBJECTS
   }             phase;
   gint          n_scanned_metadata;
-  SoupURI       *fetching_sync_uri;
-  
+
   gboolean          gpg_verify;
   gboolean          gpg_verify_summary;
   gboolean          has_tombstone_commits;
@@ -137,11 +135,6 @@ typedef struct {
   guint recursion_depth;
 } ScanObjectQueueData;
 
-static SoupURI *
-suburi_new (SoupURI   *base,
-            const char *first,
-            ...) G_GNUC_NULL_TERMINATED;
-
 static void queue_scan_one_metadata_object (OtPullData         *pull_data,
                                             const char         *csum,
                                             OstreeObjectType    objtype,
@@ -158,39 +151,6 @@ static gboolean scan_one_metadata_object_c (OtPullData         *pull_data,
                                             guint               recursion_depth,
                                             GCancellable       *cancellable,
                                             GError            **error);
-
-static SoupURI *
-suburi_new (SoupURI   *base,
-            const char *first,
-            ...)
-{
-  va_list args;
-  GPtrArray *arg_array;
-  const char *arg;
-  char *subpath;
-  SoupURI *ret;
-
-  arg_array = g_ptr_array_new ();
-  g_ptr_array_add (arg_array, (char*)soup_uri_get_path (base));
-  g_ptr_array_add (arg_array, (char*)first);
-
-  va_start (args, first);
-  
-  while ((arg = va_arg (args, const char *)) != NULL)
-    g_ptr_array_add (arg_array, (char*)arg);
-  g_ptr_array_add (arg_array, NULL);
-
-  subpath = g_build_filenamev ((char**)arg_array->pdata);
-  g_ptr_array_unref (arg_array);
-  
-  ret = soup_uri_copy (base);
-  soup_uri_set_path (ret, subpath);
-  g_free (subpath);
-  
-  va_end (args);
-  
-  return ret;
-}
 
 static gboolean
 update_progress (gpointer user_data)
@@ -215,7 +175,7 @@ update_progress (gpointer user_data)
   outstanding_fetches = pull_data->n_outstanding_content_fetches +
     pull_data->n_outstanding_metadata_fetches +
     pull_data->n_outstanding_deltapart_fetches;
-  bytes_transferred = _ostree_fetcher_bytes_transferred (pull_data->fetcher);
+  bytes_transferred = ostree_fetcher_bytes_transferred (pull_data->fetcher);
   fetched = pull_data->n_fetched_metadata + pull_data->n_fetched_content;
   requested = pull_data->n_requested_metadata + pull_data->n_requested_content;
   n_scanned_metadata = pull_data->n_scanned_metadata;
@@ -360,61 +320,6 @@ typedef struct {
   GInputStream   *result_stream;
 } OstreeFetchUriSyncData;
 
-static gboolean
-fetch_uri_contents_membuf_sync (OtPullData    *pull_data,
-                                SoupURI        *uri,
-                                gboolean        add_nul,
-                                gboolean        allow_noent,
-                                GBytes        **out_contents,
-                                GCancellable   *cancellable,
-                                GError        **error)
-{
-  gboolean ret;
-  pull_data->fetching_sync_uri = uri;
-  ret = _ostree_fetcher_request_uri_to_membuf (pull_data->fetcher,
-                                               uri,
-                                               add_nul,
-                                               allow_noent,
-                                               out_contents,
-                                               OSTREE_MAX_METADATA_SIZE,
-                                               cancellable,
-                                               error);
-  pull_data->fetching_sync_uri = NULL;
-  return ret;
-}
-
-static gboolean
-fetch_uri_contents_utf8_sync (OtPullData  *pull_data,
-                              SoupURI     *uri,
-                              char       **out_contents,
-                              GCancellable  *cancellable,
-                              GError     **error)
-{
-  gboolean ret = FALSE;
-  g_autoptr(GBytes) bytes = NULL;
-  g_autofree char *ret_contents = NULL;
-  gsize len;
-
-  if (!fetch_uri_contents_membuf_sync (pull_data, uri, TRUE, FALSE,
-                                       &bytes, cancellable, error))
-    goto out;
-
-  ret_contents = g_bytes_unref_to_data (bytes, &len);
-  bytes = NULL;
-
-  if (!g_utf8_validate (ret_contents, -1, NULL))
-    {
-      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                   "Invalid UTF-8");
-      goto out;
-    }
-
-  ret = TRUE;
-  ot_transfer_out_value (out_contents, &ret_contents);
- out:
-  return ret;
-}
-
 static void
 enqueue_one_object_request (OtPullData        *pull_data,
                             const char        *checksum,
@@ -553,35 +458,6 @@ scan_dirtree_object (OtPullData   *pull_data,
 }
 
 static gboolean
-fetch_ref_contents (OtPullData    *pull_data,
-                    const char    *ref,
-                    char         **out_contents,
-                    GCancellable  *cancellable,
-                    GError       **error)
-{
-  gboolean ret = FALSE;
-  g_autofree char *ret_contents = NULL;
-  SoupURI *target_uri = NULL;
-
-  target_uri = suburi_new (pull_data->base_uri, "refs", "heads", ref, NULL);
-  
-  if (!fetch_uri_contents_utf8_sync (pull_data, target_uri, &ret_contents, cancellable, error))
-    goto out;
-
-  g_strchomp (ret_contents);
-
-  if (!ostree_validate_checksum_string (ret_contents, error))
-    goto out;
-
-  ret = TRUE;
-  ot_transfer_out_value (out_contents, &ret_contents);
- out:
-  if (target_uri)
-    soup_uri_free (target_uri);
-  return ret;
-}
-
-static gboolean
 lookup_commit_checksum_from_summary (OtPullData    *pull_data,
                                      const char    *ref,
                                      char         **out_checksum,
@@ -681,7 +557,7 @@ content_fetch_on_complete (GObject        *object,
   const char *checksum;
   OstreeObjectType objtype;
 
-  temp_path = _ostree_fetcher_request_uri_with_partial_finish (fetcher, result, error);
+  temp_path = ostree_fetcher_request_uri_with_partial_finish (fetcher, result, error);
   if (!temp_path)
     goto out;
 
@@ -701,7 +577,7 @@ content_fetch_on_complete (GObject        *object,
       if (!have_object)
         {
           if (!_ostree_repo_commit_loose_final (pull_data->repo, checksum, OSTREE_OBJECT_TYPE_FILE,
-                                                _ostree_fetcher_get_dfd (fetcher), temp_path,
+                                                ostree_fetcher_get_dfd (fetcher), temp_path,
                                                 cancellable, error))
             goto out;
         }
@@ -711,13 +587,13 @@ content_fetch_on_complete (GObject        *object,
     {
       /* Non-mirroring path */
 
-      if (!ostree_content_file_parse_at (TRUE, _ostree_fetcher_get_dfd (fetcher),
+      if (!ostree_content_file_parse_at (TRUE, ostree_fetcher_get_dfd (fetcher),
                                          temp_path, FALSE,
                                          &file_in, &file_info, &xattrs,
                                          cancellable, error))
         {
           /* If it appears corrupted, delete it */
-          (void) unlinkat (_ostree_fetcher_get_dfd (fetcher), temp_path, 0);
+          (void) unlinkat (ostree_fetcher_get_dfd (fetcher), temp_path, 0);
           goto out;
         }
 
@@ -725,7 +601,7 @@ content_fetch_on_complete (GObject        *object,
        * a reference to the fd.  If we fail to write later, then
        * the temp space will be cleaned up.
        */
-      (void) unlinkat (_ostree_fetcher_get_dfd (fetcher), temp_path, 0);
+      (void) unlinkat (ostree_fetcher_get_dfd (fetcher), temp_path, 0);
 
       if (!ostree_raw_file_to_content_stream (file_in, file_info, xattrs,
                                               &object_input, &length,
@@ -809,7 +685,7 @@ meta_fetch_on_complete (GObject           *object,
   g_debug ("fetch of %s%s complete", ostree_object_to_string (checksum, objtype),
            fetch_data->is_detached_meta ? " (detached)" : "");
 
-  temp_path = _ostree_fetcher_request_uri_with_partial_finish (fetcher, result, error);
+  temp_path = ostree_fetcher_request_uri_with_partial_finish (fetcher, result, error);
   if (!temp_path)
     {
       if (g_error_matches (local_error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
@@ -846,7 +722,7 @@ meta_fetch_on_complete (GObject           *object,
   if (objtype == OSTREE_OBJECT_TYPE_TOMBSTONE_COMMIT)
     goto out;
 
-  fd = openat (_ostree_fetcher_get_dfd (fetcher), temp_path, O_RDONLY | O_CLOEXEC);
+  fd = openat (ostree_fetcher_get_dfd (fetcher), temp_path, O_RDONLY | O_CLOEXEC);
   if (fd == -1)
     {
       glnx_set_error_from_errno (error);
@@ -860,7 +736,7 @@ meta_fetch_on_complete (GObject           *object,
         goto out;
 
       /* Now delete it, see comment in corresponding content fetch path */
-      (void) unlinkat (_ostree_fetcher_get_dfd (fetcher), temp_path, 0);
+      (void) unlinkat (ostree_fetcher_get_dfd (fetcher), temp_path, 0);
 
       if (!ostree_repo_write_commit_detached_metadata (pull_data->repo, checksum, metadata,
                                                        pull_data->cancellable, error))
@@ -875,7 +751,7 @@ meta_fetch_on_complete (GObject           *object,
                                    FALSE, &metadata, error))
         goto out;
 
-      (void) unlinkat (_ostree_fetcher_get_dfd (fetcher), temp_path, 0);
+      (void) unlinkat (ostree_fetcher_get_dfd (fetcher), temp_path, 0);
 
       /* Write the commitpartial file now while we're still fetching data */
       if (objtype == OSTREE_OBJECT_TYPE_COMMIT)
@@ -962,11 +838,11 @@ static_deltapart_fetch_on_complete (GObject           *object,
 
   g_debug ("fetch static delta part %s complete", fetch_data->expected_checksum);
 
-  temp_path = _ostree_fetcher_request_uri_with_partial_finish (fetcher, result, error);
+  temp_path = ostree_fetcher_request_uri_with_partial_finish (fetcher, result, error);
   if (!temp_path)
     goto out;
 
-  fd = openat (_ostree_fetcher_get_dfd (fetcher), temp_path, O_RDONLY | O_CLOEXEC);
+  fd = openat (ostree_fetcher_get_dfd (fetcher), temp_path, O_RDONLY | O_CLOEXEC);
   if (fd == -1)
     {
       glnx_set_error_from_errno (error);
@@ -974,7 +850,7 @@ static_deltapart_fetch_on_complete (GObject           *object,
     }
 
   /* From here on, if we fail to apply the delta, we'll re-fetch it */
-  if (unlinkat (_ostree_fetcher_get_dfd (fetcher), temp_path, 0) < 0)
+  if (unlinkat (ostree_fetcher_get_dfd (fetcher), temp_path, 0) < 0)
     {
       glnx_set_error_from_errno (error);
       goto out;
@@ -1304,19 +1180,6 @@ enqueue_one_object_request (OtPullData        *pull_data,
            ostree_object_type_to_string (objtype),
            is_detached_meta ? " (detached)" : "");
 
-  if (is_detached_meta)
-    {
-      char buf[_OSTREE_LOOSE_PATH_MAX];
-      _ostree_loose_path_with_suffix (buf, checksum, OSTREE_OBJECT_TYPE_COMMIT,
-                                      pull_data->remote_mode, "meta");
-      obj_uri = suburi_new (pull_data->base_uri, "objects", buf, NULL);
-    }
-  else
-    {
-      objpath = _ostree_get_relative_object_path (checksum, objtype, TRUE);
-      obj_uri = suburi_new (pull_data->base_uri, objpath, NULL);
-    }
-
   is_meta = OSTREE_OBJECT_TYPE_IS_META (objtype);
   if (is_meta)
     {
@@ -1342,7 +1205,20 @@ enqueue_one_object_request (OtPullData        *pull_data,
   else
     expected_max_size = 0;
 
-  _ostree_fetcher_request_uri_with_partial_async (pull_data->fetcher, obj_uri,
+  if (is_detached_meta)
+    {
+      char buf[_OSTREE_LOOSE_PATH_MAX];
+      _ostree_loose_path_with_suffix (buf, checksum, OSTREE_OBJECT_TYPE_COMMIT,
+                                      pull_data->remote_mode, "meta");
+      obj_uri = suburi_new (pull_data->base_uri, "objects", buf, NULL);
+    }
+  else
+    {
+      objpath = _ostree_get_relative_object_path (checksum, objtype, TRUE);
+      obj_uri = suburi_new (pull_data->base_uri, objpath, NULL);
+    }
+
+  ostree_fetcher_request_uri_with_partial_async (pull_data->fetcher, obj_uri,
                                                   expected_max_size,
                                                   is_meta ? OSTREE_REPO_PULL_METADATA_PRIORITY
                                                           : OSTREE_REPO_PULL_CONTENT_PRIORITY,
@@ -1352,7 +1228,7 @@ enqueue_one_object_request (OtPullData        *pull_data,
 }
 
 static gboolean
-load_remote_repo_config (OtPullData    *pull_data,
+load_remote_repo_config (OstreeFetcher  *fetcher,
                          GKeyFile     **out_keyfile,
                          GCancellable  *cancellable,
                          GError       **error)
@@ -1362,9 +1238,9 @@ load_remote_repo_config (OtPullData    *pull_data,
   GKeyFile *ret_keyfile = NULL;
   SoupURI *target_uri = NULL;
 
-  target_uri = suburi_new (pull_data->base_uri, "config", NULL);
+  target_uri = suburi_new (fetcher->base_uri, "config", NULL);
   
-  if (!fetch_uri_contents_utf8_sync (pull_data, target_uri, &contents,
+  if (!ostree_fetcher_request_uri_to_membuf_utf8 (fetcher, target_uri, &contents,
                                      cancellable, error))
     goto out;
 
@@ -1400,9 +1276,9 @@ request_static_delta_superblock_sync (OtPullData  *pull_data,
   
   target_uri = suburi_new (pull_data->base_uri, delta_name, NULL);
   
-  if (!fetch_uri_contents_membuf_sync (pull_data, target_uri, FALSE, TRUE,
-                                       &delta_superblock_data,
-                                       pull_data->cancellable, error))
+  if (!ostree_fetcher_request_uri_to_membuf (pull_data, target_uri, FALSE, TRUE,
+                                              &delta_superblock_data,
+                                              pull_data->cancellable, error))
     goto out;
   
   if (delta_superblock_data)
@@ -1701,7 +1577,7 @@ process_one_static_delta (OtPullData   *pull_data,
       else
         {
           target_uri = suburi_new (pull_data->base_uri, deltapart_path, NULL);
-          _ostree_fetcher_request_uri_with_partial_async (pull_data->fetcher, target_uri, size,
+          ostree_fetcher_request_uri_with_partial_async (pull_data->fetcher, target_uri, size,
                                                           OSTREE_FETCHER_DEFAULT_PRIORITY,
                                                           pull_data->cancellable,
                                                           static_deltapart_fetch_on_complete,
@@ -1863,7 +1739,7 @@ _ostree_repo_remote_new_fetcher (OstreeRepo  *self,
   if (tls_permissive)
     fetcher_flags |= OSTREE_FETCHER_FLAGS_TLS_PERMISSIVE;
 
-  fetcher = _ostree_fetcher_new (self->tmp_dir_fd, fetcher_flags);
+  fetcher = ostree_fetcher_new (self->tmp_dir_fd, fetcher_flags);
 
   {
     g_autofree char *tls_client_cert_path = NULL;
@@ -1898,7 +1774,7 @@ _ostree_repo_remote_new_fetcher (OstreeRepo  *self,
         if (client_cert == NULL)
           goto out;
 
-        _ostree_fetcher_set_client_cert (fetcher, client_cert);
+        ostree_fetcher_set_client_cert (fetcher, client_cert);
       }
   }
 
@@ -1918,7 +1794,7 @@ _ostree_repo_remote_new_fetcher (OstreeRepo  *self,
         if (db == NULL)
           goto out;
 
-        _ostree_fetcher_set_tls_database (fetcher, db);
+        ostree_fetcher_set_tls_database (fetcher, db);
       }
   }
 
@@ -1931,7 +1807,7 @@ _ostree_repo_remote_new_fetcher (OstreeRepo  *self,
       goto out;
 
     if (http_proxy != NULL)
-      _ostree_fetcher_set_proxy (fetcher, http_proxy);
+      ostree_fetcher_set_proxy (fetcher, http_proxy);
   }
 
   success = TRUE;
@@ -1988,7 +1864,7 @@ _ostree_preload_metadata_file (OstreeRepo    *self,
       path = g_build_filename (base_path, filename, NULL);
       uri = soup_uri_new_with_base (base_uri, path);
 
-      ret = _ostree_fetcher_request_uri_to_membuf (fetcher, uri,
+      ret = ostree_fetcher_request_uri_to_membuf (fetcher, uri,
                                                    FALSE, TRUE,
                                                    out_bytes,
                                                    OSTREE_MAX_METADATA_SIZE,
@@ -2027,10 +1903,6 @@ repo_remote_fetch_summary (OstreeRepo    *self,
   mainctx = g_main_context_new ();
   g_main_context_push_thread_default (mainctx);
 
-  fetcher = _ostree_repo_remote_new_fetcher (self, name, error);
-  if (fetcher == NULL)
-    goto out;
-
   {
     g_autofree char *url_string = NULL;
     if (metalink_url_string)
@@ -2047,7 +1919,12 @@ repo_remote_fetch_summary (OstreeRepo    *self,
                      "Invalid URL '%s'", url_string);
         goto out;
       }
+
+    fetcher = _ostree_repo_remote_new_fetcher (self, name, error);
   }
+
+  if (fetcher == NULL)
+    goto out;
 
   if (!_ostree_preload_metadata_file (self,
                                       fetcher,
@@ -2276,10 +2153,6 @@ ostree_repo_pull_with_options (OstreeRepo             *self,
 
   pull_data->phase = OSTREE_PULL_PHASE_FETCHING_REFS;
 
-  pull_data->fetcher = _ostree_repo_remote_new_fetcher (self, remote_name_or_baseurl, error);
-  if (pull_data->fetcher == NULL)
-    goto out;
-
   pull_data->tmpdir_dfd = pull_data->repo->tmp_dir_fd;
   requested_refs_to_fetch = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
   commits_to_fetch = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
@@ -2306,6 +2179,10 @@ ostree_repo_pull_with_options (OstreeRepo             *self,
                        "Failed to parse url '%s'", baseurl);
           goto out;
         }
+
+      pull_data->fetcher = _ostree_repo_remote_new_fetcher (self, remote_name_or_baseurl, error);
+      if (pull_data->fetcher == NULL)
+        goto out;
     }
   else
     {
@@ -2320,6 +2197,10 @@ ostree_repo_pull_with_options (OstreeRepo             *self,
           goto out;
         }
       
+      pull_data->fetcher = _ostree_repo_remote_new_fetcher (self, remote_name_or_baseurl, error);
+      if (pull_data->fetcher == NULL)
+        goto out;
+
       metalink = _ostree_metalink_new (pull_data->fetcher, "summary",
                                        OSTREE_MAX_METADATA_SIZE, metalink_uri);
       soup_uri_free (metalink_uri);
@@ -2394,8 +2275,8 @@ ostree_repo_pull_with_options (OstreeRepo             *self,
     if (!pull_data->summary_data_sig)
       {
         uri = suburi_new (pull_data->base_uri, "summary.sig", NULL);
-        if (!fetch_uri_contents_membuf_sync (pull_data, uri, FALSE, TRUE,
-                                             &bytes_sig, cancellable, error))
+        if (!ostree_fetcher_request_uri_to_membuf (pull_data, uri, FALSE, TRUE,
+                                                    &bytes_sig, cancellable, error))
           goto out;
         soup_uri_free (uri);
       }
@@ -2416,8 +2297,8 @@ ostree_repo_pull_with_options (OstreeRepo             *self,
     if (!pull_data->summary && !bytes_summary)
       {
         uri = suburi_new (pull_data->base_uri, "summary", NULL);
-        if (!fetch_uri_contents_membuf_sync (pull_data, uri, FALSE, TRUE,
-                                             &bytes_summary, cancellable, error))
+        if (!ostree_fetcher_request_uri_to_membuf (pull_data, uri, FALSE, TRUE,
+                                                    &bytes_summary, cancellable, error))
           goto out;
         soup_uri_free (uri);
       }
@@ -2773,7 +2654,7 @@ ostree_repo_pull_with_options (OstreeRepo             *self,
 
   end_time = g_get_monotonic_time ();
 
-  bytes_transferred = _ostree_fetcher_bytes_transferred (pull_data->fetcher);
+  bytes_transferred = ostree_fetcher_bytes_transferred (pull_data->fetcher);
   if (bytes_transferred > 0 && pull_data->progress)
     {
       guint shift; 

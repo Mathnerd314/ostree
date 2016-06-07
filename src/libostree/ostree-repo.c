@@ -620,7 +620,6 @@ ostree_repo_constructed (GObject *object)
 
   self->objects_dir = g_file_get_child (self->repodir, "objects");
   self->deltas_dir = g_file_get_child (self->repodir, "deltas");
-  self->uncompressed_objects_dir = g_file_get_child (self->repodir, "uncompressed-objects-cache");
   self->state_dir = g_file_get_child (self->repodir, "state");
   self->config_file = g_file_get_child (self->repodir, "config");
 
