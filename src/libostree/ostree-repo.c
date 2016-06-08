@@ -520,21 +520,15 @@ ostree_repo_finalize (GObject *object)
     (void) close (self->commit_stagedir_fd);
   g_free (self->commit_stagedir_name);
   glnx_release_lock_file (&self->commit_stagedir_lock);
-  g_clear_object (&self->tmp_dir);
   if (self->tmp_dir_fd)
     (void) close (self->tmp_dir_fd);
   if (self->cache_dir_fd)
     (void) close (self->cache_dir_fd);
-  g_clear_object (&self->objects_dir);
   if (self->objects_dir_fd != -1)
     (void) close (self->objects_dir_fd);
-  g_clear_object (&self->deltas_dir);
-  g_clear_object (&self->state_dir);
-  g_clear_object (&self->uncompressed_objects_dir);
   if (self->uncompressed_objects_dir_fd != -1)
     (void) close (self->uncompressed_objects_dir_fd);
   g_clear_object (&self->config_file);
-  g_clear_object (&self->sysroot_dir);
   g_free (self->remotes_config_dir);
 
   g_clear_object (&self->transaction_lock_path);
@@ -616,16 +610,7 @@ ostree_repo_constructed (GObject *object)
 
   g_assert (self->repodir != NULL);
 
-  self->tmp_dir = g_file_resolve_relative_path (self->repodir, "tmp");
-
-  self->objects_dir = g_file_get_child (self->repodir, "objects");
-  self->deltas_dir = g_file_get_child (self->repodir, "deltas");
-  self->state_dir = g_file_get_child (self->repodir, "state");
   self->config_file = g_file_get_child (self->repodir, "config");
-
-  /* Ensure the "sysroot-path" property is set. */
-  if (self->sysroot_dir == NULL)
-    self->sysroot_dir = g_object_ref (_ostree_get_default_sysroot_path ());
 
   G_OBJECT_CLASS (ostree_repo_parent_class)->constructed (object);
 }
@@ -1006,7 +991,7 @@ impl_repo_remote_add (OstreeRepo     *self,
    * so we need to not only check if a "sysroot" argument was given
    * but also whether it's actually different from OstreeRepo's.
    *
-   * XXX Having API regret about the "sysroot" argument now.
+   *
    */
   if (sysroot != NULL)
     different_sysroot = !g_file_equal (sysroot, self->sysroot_dir);

@@ -66,16 +66,10 @@ struct OstreeRepo {
   GLnxLockFile commit_stagedir_lock;
 
   GFile *repodir;
-  int    repo_dir_fd;
-  GFile *tmp_dir;
-  int    tmp_dir_fd;
-  int    cache_dir_fd;
-  char  *cache_dir;
-  GFile *objects_dir;
-  GFile *state_dir;
+  int repo_dir_fd;
+  int tmp_dir_fd;
+  int cache_dir_fd;
   int objects_dir_fd;
-  GFile *deltas_dir;
-  GFile *uncompressed_objects_dir;
   int uncompressed_objects_dir_fd;
   GFile *config_file;
   GFile *sysroot_dir;
