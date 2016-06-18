@@ -142,10 +142,27 @@ typedef struct {
 } FetchStaticDeltaData;
 
 typedef struct {
+  OtPullData *pull_data;
+  char *from_revision;
+  char *to_revision;
+  char *branch;
+} FetchDeltaSuperBlockData;
+
+typedef struct {
   guchar csum[OSTREE_SHA256_DIGEST_LEN];
   OstreeObjectType objtype;
   guint recursion_depth;
 } ScanObjectQueueData;
+
+static void
+fetch_delta_superblock_data_free (gpointer  data)
+{
+  FetchDeltaSuperBlockData *fetch_data = data;
+  g_free (fetch_data->from_revision);
+  g_free (fetch_data->to_revision);
+  g_free (fetch_data->branch);
+  g_free (fetch_data);
+}
 
 static SoupURI *
 suburi_new (SoupURI   *base,
@@ -168,6 +185,30 @@ static gboolean scan_one_metadata_object_c (OtPullData         *pull_data,
                                             guint               recursion_depth,
                                             GCancellable       *cancellable,
                                             GError            **error);
+
+static void
+delta_superblock_process (FetchDeltaSuperBlockData *fetch_data,
+                          GBytes *delta_superblock_data,
+                          GCancellable  *cancellable,
+                          GError       **error);
+
+static void
+fetch_revision (FetchDeltaSuperBlockData *fetch_data,
+                GCancellable  *cancellable,
+                GError       **error);
+
+static void
+delta_superblock_fetch_on_complete (GObject        *object,
+                         GAsyncResult   *result,
+                         gpointer        user_data);
+
+static gboolean
+process_one_static_delta (OtPullData   *pull_data,
+                          const char   *from_revision,
+                          const char   *to_revision,
+                          GVariant     *delta_superblock,
+                          GCancellable *cancellable,
+                          GError      **error);
 
 static SoupURI *
 suburi_new (SoupURI   *base,
@@ -560,6 +601,51 @@ scan_dirtree_object (OtPullData   *pull_data,
   ret = TRUE;
  out:
   return ret;
+}
+
+/**
+ * fetch_revision:
+ * Fetch a static delta or commit file
+ */
+static void
+fetch_revision (FetchDeltaSuperBlockData *fetch_data,
+                GCancellable  *cancellable,
+                GError       **error)
+{
+  OtPullData *pull_data = fetch_data->pull_data;
+  gboolean free_fetch_data = TRUE;
+
+  g_strchomp (fetch_data->to_revision);
+
+  if (!ostree_validate_checksum_string (fetch_data->to_revision, error))
+    goto out;
+
+  /* Store actual resolved rev so we know which refs to update */
+  g_hash_table_replace (pull_data->requested_refs_to_fetch, g_strdup (fetch_data->branch), g_strdup (fetch_data->to_revision));
+
+  if (!pull_data->disable_static_deltas && (fetch_data->from_revision == NULL || g_strcmp0 (fetch_data->from_revision, fetch_data->to_revision) != 0))
+    {
+      g_autofree char *delta_name = _ostree_get_relative_static_delta_superblock_path (fetch_data->from_revision, fetch_data->to_revision);
+      SoupURI *target_uri = suburi_new (pull_data->base_uri, delta_name, NULL);
+      g_debug ("fetching delta %s", delta_name);
+      _ostree_fetcher_stream_uri_async (pull_data->fetcher,
+                                        target_uri,
+                                        OSTREE_MAX_METADATA_SIZE,
+                                        OSTREE_REPO_PULL_METADATA_PRIORITY,
+                                        cancellable,
+                                        delta_superblock_fetch_on_complete,
+                                        fetch_data);
+      free_fetch_data = FALSE;
+      pull_data->n_outstanding[FETCH_DELTASUPER]++;
+      g_clear_pointer (&target_uri, (GDestroyNotify) soup_uri_free);
+    }
+  else
+    {
+      delta_superblock_process (fetch_data, NULL, cancellable, error);
+    }
+ out:
+  if (free_fetch_data)
+    fetch_delta_superblock_data_free (fetch_data);
 }
 
 static gboolean
@@ -1382,6 +1468,78 @@ load_remote_repo_config (OtPullData    *pull_data,
   return ret;
 }
 
+static void
+delta_superblock_process (FetchDeltaSuperBlockData *fetch_data,
+                          GBytes *delta_superblock_data,
+                          GCancellable  *cancellable,
+                          GError       **error)
+{
+  OtPullData *pull_data = fetch_data->pull_data;
+  char* from_revision = fetch_data->from_revision;
+  char* to_revision = fetch_data->to_revision;
+  if (delta_superblock_data)
+    {
+      g_autoptr(GVariant) delta_superblock = NULL;
+      {
+        g_autofree gchar *delta = NULL;
+        g_autofree guchar *ret_csum = NULL;
+        guchar *summary_csum;
+        g_autoptr (GInputStream) summary_is = NULL;
+
+        summary_is = g_memory_input_stream_new_from_data (g_bytes_get_data (delta_superblock_data, NULL),
+                                                          g_bytes_get_size (delta_superblock_data),
+                                                          NULL);
+
+        if (!ot_gio_checksum_stream (summary_is, &ret_csum, cancellable, error))
+          goto out;
+
+        delta = g_strconcat (from_revision ? from_revision : "", from_revision ? "-" : "", to_revision, NULL);
+        summary_csum = g_hash_table_lookup (pull_data->summary_deltas_checksums, delta);
+
+        /* At this point we've GPG verified the data, so in theory
+         * could trust that they provided the right data, but let's
+         * make this a hard error.
+         */
+        if (pull_data->gpg_verify_summary && !summary_csum)
+          {
+            g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                         "GPG verification enabled, but no summary signatures found (use gpg-verify-summary=false in remote config to disable)");
+            goto out;
+          }
+
+        if (summary_csum && memcmp (summary_csum, ret_csum, 32))
+          {
+            g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Invalid checksum for static delta %s", delta);
+            goto out;
+          }
+      }
+
+      delta_superblock = g_variant_new_from_bytes ((GVariantType*)OSTREE_STATIC_DELTA_SUPERBLOCK_FORMAT,
+                                                      delta_superblock_data, FALSE);
+
+      g_debug ("processing delta superblock for %s-%s", from_revision ? from_revision : "empty", to_revision);
+      g_ptr_array_add (pull_data->static_delta_superblocks, g_variant_ref (delta_superblock));
+      if (!process_one_static_delta (pull_data, from_revision, to_revision,
+                                    delta_superblock,
+                                    cancellable, error))
+        goto out;
+    }
+  else
+    {
+      if (pull_data->require_static_deltas)
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                        "Static deltas required, but none found for %s to %s",
+                        from_revision, to_revision);
+          goto out;
+        }
+      g_debug ("no delta superblock for %s-%s", from_revision ? from_revision : "empty", to_revision);
+      queue_scan_one_metadata_object (pull_data, to_revision, OSTREE_OBJECT_TYPE_COMMIT, 0);
+    }
+ out:
+  return;
+}
+
 static gboolean
 process_one_static_delta_fallback (OtPullData   *pull_data,
                                    gboolean      delta_byteswap,
@@ -2046,95 +2204,6 @@ repo_remote_fetch_summary (OstreeRepo    *self,
   return ret;
 }
 
-typedef struct {
-  OtPullData *pull_data;
-  char *from_revision;
-  char *to_revision;
-  char *branch;
-} FetchDeltaSuperBlockData;
-
-static void
-fetch_delta_superblock_data_free (gpointer  data)
-{
-  FetchDeltaSuperBlockData *fetch_data = data;
-  g_free (fetch_data->from_revision);
-  g_free (fetch_data->to_revision);
-  g_free (fetch_data->branch);
-  g_free (fetch_data);
-}
-
-static void
-delta_superblock_process (FetchDeltaSuperBlockData *fetch_data,
-                          GBytes *delta_superblock_data,
-                          GCancellable  *cancellable,
-                          GError       **error)
-{
-  OtPullData *pull_data = fetch_data->pull_data;
-  char* from_revision = fetch_data->from_revision;
-  char* to_revision = fetch_data->to_revision;
-  if (delta_superblock_data)
-    {
-      g_autoptr(GVariant) delta_superblock = NULL;
-      {
-        g_autofree gchar *delta = NULL;
-        g_autofree guchar *ret_csum = NULL;
-        guchar *summary_csum;
-        g_autoptr (GInputStream) summary_is = NULL;
-
-        summary_is = g_memory_input_stream_new_from_data (g_bytes_get_data (delta_superblock_data, NULL),
-                                                          g_bytes_get_size (delta_superblock_data),
-                                                          NULL);
-
-        if (!ot_gio_checksum_stream (summary_is, &ret_csum, cancellable, error))
-          goto out;
-
-        delta = g_strconcat (from_revision ? from_revision : "", from_revision ? "-" : "", to_revision, NULL);
-        summary_csum = g_hash_table_lookup (pull_data->summary_deltas_checksums, delta);
-
-        /* At this point we've GPG verified the data, so in theory
-        * could trust that they provided the right data, but let's
-        * make this a hard error.
-        */
-        if (pull_data->gpg_verify_summary && !summary_csum)
-          {
-            g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                        "GPG verification enabled, but no summary signatures found (use gpg-verify-summary=false in remote config to disable)");
-            goto out;
-          }
-
-        if (summary_csum && memcmp (summary_csum, ret_csum, 32))
-          {
-            g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Invalid checksum for static delta %s", delta);
-            goto out;
-          }
-      }
-
-      delta_superblock = g_variant_new_from_bytes ((GVariantType*)OSTREE_STATIC_DELTA_SUPERBLOCK_FORMAT,
-                                                      delta_superblock_data, FALSE);
-
-      g_debug ("processing delta superblock for %s-%s", from_revision ? from_revision : "empty", to_revision);
-      g_ptr_array_add (pull_data->static_delta_superblocks, g_variant_ref (delta_superblock));
-      if (!process_one_static_delta (pull_data, from_revision, to_revision,
-                                    delta_superblock,
-                                    cancellable, error))
-        goto out;
-    }
-  else
-    {
-      if (pull_data->require_static_deltas)
-        {
-          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                        "Static deltas required, but none found for %s to %s",
-                        from_revision, to_revision);
-          goto out;
-        }
-      g_debug ("no delta superblock for %s-%s", from_revision ? from_revision : "empty", to_revision);
-      queue_scan_one_metadata_object (pull_data, to_revision, OSTREE_OBJECT_TYPE_COMMIT, 0);
-    }
- out:
-  return;
-}
-
 static void
 delta_superblock_fetch_on_complete (GObject        *object,
                          GAsyncResult   *result,
@@ -2167,53 +2236,6 @@ delta_superblock_fetch_on_complete (GObject        *object,
   pull_data->n_fetched[FETCH_DELTASUPER]++;
   check_outstanding_requests_handle_error (pull_data, local_error);
   fetch_delta_superblock_data_free (fetch_data);
-}
-
-/**
- * fetch_revision:
- * @fetch_data: freed upon exit
- * Fetch a static delta or commit file
- *
- */
-static void
-fetch_revision (FetchDeltaSuperBlockData *fetch_data,
-                GCancellable  *cancellable,
-                GError       **error)
-{
-  OtPullData *pull_data = fetch_data->pull_data;
-  gboolean free_fetch_data = TRUE;
-
-  g_strchomp (fetch_data->to_revision);
-
-  if (!ostree_validate_checksum_string (fetch_data->to_revision, error))
-    goto out;
-
-  /* Store actual resolved rev so we know which refs to update */
-  g_hash_table_replace (pull_data->requested_refs_to_fetch, g_strdup (fetch_data->branch), g_strdup (fetch_data->to_revision));
-
-  if (!pull_data->disable_static_deltas && (fetch_data->from_revision == NULL || g_strcmp0 (fetch_data->from_revision, fetch_data->to_revision) != 0))
-    {
-      g_autofree char *delta_name = _ostree_get_relative_static_delta_superblock_path (fetch_data->from_revision, fetch_data->to_revision);
-      SoupURI *target_uri = suburi_new (pull_data->base_uri, delta_name, NULL);
-      g_debug ("fetching delta %s", delta_name);
-      _ostree_fetcher_stream_uri_async (pull_data->fetcher,
-                                        target_uri,
-                                        OSTREE_MAX_METADATA_SIZE,
-                                        OSTREE_REPO_PULL_METADATA_PRIORITY,
-                                        cancellable,
-                                        delta_superblock_fetch_on_complete,
-                                        fetch_data);
-      free_fetch_data = FALSE;
-      pull_data->n_outstanding[FETCH_DELTASUPER]++;
-      g_clear_pointer (&target_uri, (GDestroyNotify) soup_uri_free);
-    }
-  else
-    {
-      delta_superblock_process (fetch_data, NULL, cancellable, error);
-    }
- out:
-  if (free_fetch_data)
-    fetch_delta_superblock_data_free (fetch_data);
 }
 
 static void
