@@ -107,7 +107,6 @@ typedef struct {
   gboolean          is_untrusted;
   gboolean          require_static_deltas;
   gboolean          disable_static_deltas;
-  gboolean          fetch_all_refs;
 
   char         *dir;
   gboolean      commitpartial_exists;
