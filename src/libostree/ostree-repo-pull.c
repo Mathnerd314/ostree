@@ -279,7 +279,6 @@ pull_termination_condition (OtPullData          *pull_data)
   int i;
 
   for(i = 0; i < MAX_FETCH_TYPES && current_idle; i++) {
-    g_debug("pull: idle %u outstanding %u write %u", i, pull_data->n_outstanding[i], pull_data->n_outstanding_write_requests[i]);
     current_idle = current_idle && pull_data->n_outstanding[i] == 0
                                 && pull_data->n_outstanding_write_requests[i] == 0;
   }
